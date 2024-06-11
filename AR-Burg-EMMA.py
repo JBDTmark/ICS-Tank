@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from scipy.stats import f
 from sklearn.preprocessing import StandardScaler
-
+# 使用EMMA算法修正预测
 def read_data(file_path):
     print("Reading data from file...")
     data = pd.read_csv(file_path, header=None).squeeze()
@@ -11,6 +11,15 @@ def read_data(file_path):
     print(data.head(10))
     print(f"Data statistics:\n{data.describe()}")
     return data
+
+def differencing(data, lag=1):
+    return data.diff(periods=lag).dropna()
+
+def multiple_differencing(data, max_lag=2):
+    differenced_data = data
+    for lag in range(1, max_lag + 1):
+        differenced_data = differencing(differenced_data, lag)
+    return differenced_data
 
 def burg_method(y, max_order):
     print("Executing Burg's method...")
@@ -57,6 +66,16 @@ def bic_criterion(variances, N):
     print(f"Best order selected: {best_order} with BIC = {bic_values[best_order]}")
     return best_order, bic_values
 
+def aic_criterion(variances, N):
+    print("Calculating AIC values...")
+    aic_values = np.zeros(len(variances))
+    for p in range(1, len(variances)):
+        aic_values[p] = N * np.log(variances[p]) + 2 * p
+        print(f"Order {p}: AIC = {aic_values[p]}")
+    best_order = np.argmin(aic_values[1:]) + 1
+    print(f"Best order selected: {best_order} with AIC = {aic_values[best_order]}")
+    return best_order, aic_values
+
 def shewart_control_limits(data, control_limit_multiplier=2):
     mean = data.mean()
     std_dev = data.std()
@@ -85,30 +104,38 @@ def plot_series(original, predictions, upper_limit, lower_limit, filename):
     plt.show()
 
 def main():
-    file_path = 'Level_meter_data.txt'  # 更新为你的文件路径
+    file_path = 'Flow_meter_data.txt'  # 更新为你的文件路径
     data = read_data(file_path)
     
+    # 标准化处理
     scaler = StandardScaler()
     standardized_data = scaler.fit_transform(data.values.reshape(-1, 1)).flatten()
     print("Standardized data. First 10 values:")
     print(standardized_data[:10])
     print(f"Standardized Data Statistics:\nMean: {np.mean(standardized_data)}, Std Dev: {np.std(standardized_data)}, Min: {np.min(standardized_data)}, Max: {np.max(standardized_data)}")
     
-    differenced_data = np.diff(standardized_data)
+    # 多次差分处理
+    differenced_data = multiple_differencing(pd.Series(standardized_data), max_lag=1)
     print("Differenced data. First 10 values:")
     print(differenced_data[:10])
     
-    max_order = 8
-    a, reflection_coeffs, variances = burg_method(differenced_data, max_order)
-    best_order, bic_values = bic_criterion(variances, len(differenced_data))
+    max_order = 4 # 使用较小的阶数以保持趋势的正确性
+    a, reflection_coeffs, variances = burg_method(differenced_data.values, max_order)
+    
+    criterion = input("Enter the criterion to use (AIC/BIC): ").strip().upper()
+    if criterion == 'AIC':
+        best_order, criterion_values = aic_criterion(variances, len(differenced_data))
+    else:
+        best_order, criterion_values = bic_criterion(variances, len(differenced_data))
+    
     print(f"Best AR model order: {best_order}")
     print("Model coefficients:", a[best_order, :best_order])
 
     model_coeffs = a[best_order, :best_order]
-    start_point = -1000  # 从倒数第1000个数据点开始预测
-    prediction_length = 400  # 预测长度为500
+    start_point = -1000  # 尝试调整预测的起始点
+    prediction_length = 500  # 预测长度为500
     predictions = np.zeros(prediction_length)
-    extended_data = np.pad(differenced_data, (best_order, 0), 'constant', constant_values=(0,))
+    extended_data = np.pad(differenced_data.values, (best_order, 0), 'constant', constant_values=(0,))
     for i in range(prediction_length):
         start_index = start_point + i - best_order
         if start_index < -len(extended_data):
@@ -127,6 +154,14 @@ def main():
     last_value = standardized_data[start_point - 1]
     predictions = np.r_[last_value, predictions].cumsum()[1:]
     predictions = scaler.inverse_transform(predictions.reshape(-1, 1)).flatten()
+
+    # 使用EWMA修正残差
+    residuals = data[start_point:start_point + prediction_length] - predictions[:len(data[start_point:start_point + prediction_length])]
+    ewma_residuals = residuals.ewm(span=50).mean()
+    predictions[:len(data[start_point:start_point + prediction_length])] += ewma_residuals
+
+    # Clamp the predictions within the specified range
+    predictions = np.clip(predictions, 0, 25000)
 
     print(f"Standardized Data Series Statistics:\n{pd.Series(standardized_data).describe()}")
 

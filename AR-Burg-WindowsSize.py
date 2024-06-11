@@ -4,6 +4,7 @@ import pandas as pd
 from scipy.stats import f
 from sklearn.preprocessing import StandardScaler
 
+# 读取数据
 def read_data(file_path):
     print("Reading data from file...")
     data = pd.read_csv(file_path, header=None).squeeze()
@@ -12,15 +13,18 @@ def read_data(file_path):
     print(f"Data statistics:\n{data.describe()}")
     return data
 
+# 一阶差分
 def differencing(data, lag=1):
     return data.diff(periods=lag).dropna()
 
+# 多次差分
 def multiple_differencing(data, max_lag=2):
     differenced_data = data
     for lag in range(1, max_lag + 1):
         differenced_data = differencing(differenced_data, lag)
     return differenced_data
 
+# Burg方法计算AR系数
 def burg_method(y, max_order):
     print("Executing Burg's method...")
     N = len(y)
@@ -56,6 +60,7 @@ def burg_method(y, max_order):
 
     return a, reflection_coeffs, variances
 
+# 计算BIC准则
 def bic_criterion(variances, N):
     print("Calculating BIC values...")
     bic_values = np.zeros(len(variances))
@@ -66,6 +71,7 @@ def bic_criterion(variances, N):
     print(f"Best order selected: {best_order} with BIC = {bic_values[best_order]}")
     return best_order, bic_values
 
+# 计算AIC准则
 def aic_criterion(variances, N):
     print("Calculating AIC values...")
     aic_values = np.zeros(len(variances))
@@ -76,6 +82,7 @@ def aic_criterion(variances, N):
     print(f"Best order selected: {best_order} with AIC = {aic_values[best_order]}")
     return best_order, aic_values
 
+# 计算Shewart控制限
 def shewart_control_limits(data, control_limit_multiplier=2):
     mean = data.mean()
     std_dev = data.std()
@@ -84,6 +91,7 @@ def shewart_control_limits(data, control_limit_multiplier=2):
     print(f"Mean: {mean}, Std Dev: {std_dev}, Upper Limit: {upper_limit}, Lower Limit: {lower_limit}")
     return upper_limit, lower_limit
 
+# 进行F检验
 def f_test(data1, data2):
     var1 = np.var(data1)
     var2 = np.var(data2)
@@ -91,6 +99,7 @@ def f_test(data1, data2):
     p_value = 1 - f.cdf(f_stat, len(data1) - 1, len(data2) - 1)
     return f_stat, p_value
 
+# 绘制原始数据和预测数据
 def plot_series(original, predictions, upper_limit, lower_limit, filename):
     print("Plotting data...")
     plt.figure(figsize=(12, 6))
@@ -103,8 +112,9 @@ def plot_series(original, predictions, upper_limit, lower_limit, filename):
     plt.savefig(filename)
     plt.show()
 
+# 主函数
 def main():
-    file_path = 'Flow_meter_data.txt'  # 更新为你的文件路径
+    file_path = 'Level_meter_data.txt'  # 更新为你的文件路径
     data = read_data(file_path)
     
     # 标准化处理
@@ -119,7 +129,7 @@ def main():
     print("Differenced data. First 10 values:")
     print(differenced_data[:10])
     
-    max_order = 2 # 使用较小的阶数以保持趋势的正确性
+    max_order = 6 # 使用较小的阶数以保持趋势的正确性
     a, reflection_coeffs, variances = burg_method(differenced_data.values, max_order)
     
     criterion = input("Enter the criterion to use (AIC/BIC): ").strip().upper()
@@ -132,8 +142,8 @@ def main():
     print("Model coefficients:", a[best_order, :best_order])
 
     model_coeffs = a[best_order, :best_order]
-    start_point = -1000  # 尝试调整预测的起始点
-    prediction_length = 500  # 预测长度为500
+    start_point = -1200  # 尝试调整预测的起始点
+    prediction_length = 400  # 预测长度为400
     predictions = np.zeros(prediction_length)
     extended_data = np.pad(differenced_data.values, (best_order, 0), 'constant', constant_values=(0,))
     for i in range(prediction_length):
@@ -155,13 +165,20 @@ def main():
     predictions = np.r_[last_value, predictions].cumsum()[1:]
     predictions = scaler.inverse_transform(predictions.reshape(-1, 1)).flatten()
 
-    # 使用EWMA修正残差
+    # 使用窗口大小为20的滚动平均修正残差
     residuals = data[start_point:start_point + prediction_length] - predictions[:len(data[start_point:start_point + prediction_length])]
-    ewma_residuals = residuals.ewm(span=50).mean()
-    predictions[:len(data[start_point:start_point + prediction_length])] += ewma_residuals
+    rolling_residuals = residuals.rolling(window=5).mean().dropna()
+    predictions[:len(rolling_residuals)] += rolling_residuals
+
+    # 获取数据集中的最大值和最小值
+    data_min = data.min()
+    data_max = data.max()
+
+    # 将预测值限定在数据集中的最小值和最大值之间
+    predictions = np.clip(predictions, data_min, data_max)
 
     print(f"Standardized Data Series Statistics:\n{pd.Series(standardized_data).describe()}")
-
+    # 计算控制极限
     ucl, lcl = shewart_control_limits(pd.Series(data), control_limit_multiplier=2)  # 基于原始数据计算控制极限
     forecast_index = np.arange(len(data) + start_point, len(data) + start_point + prediction_length)
     forecast_series = pd.Series(predictions, index=forecast_index)

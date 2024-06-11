@@ -14,6 +14,7 @@ def read_data(file_path):
 
 def differencing(data, lag=1):
     return data.diff(periods=lag).dropna()
+# 大撒是大多数
 
 def multiple_differencing(data, max_lag=2):
     differenced_data = data
